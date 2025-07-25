@@ -3,96 +3,111 @@ services:
     $$cap_appname-studio:
         image: supabase/studio:$$cap_studio_version
         restart: unless-stopped
+        depends_on:
+            - $$cap_appname-analytics
         environment:
-            STUDIO_PG_META_URL: http://$$cap_appname-pg-meta.$$cap_root_domain
-            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            STUDIO_PG_META_URL: http://srv-captain--$$cap_appname-meta:8080
+            POSTGRES_PASSWORD: $$cap_pg_pass
 
-            DEFAULT_ORGANIZATION: ${STUDIO_DEFAULT_ORGANIZATION}
-            DEFAULT_PROJECT: ${STUDIO_DEFAULT_PROJECT}
+            DEFAULT_ORGANIZATION_NAME: $$cap_studio_default_organization
+            DEFAULT_PROJECT_NAME: $$cap_studio_default_project
+            OPENAI_API_KEY: $$cap_openai_api_key
 
-            SUPABASE_URL: http://$$cap_appname-supabase-kong.$$cap_root_domain
-            SUPABASE_PUBLIC_URL: http://$$cap_appname-supabase-studio.$$cap_root_domain
-
-            # Kept for backwards compatibility with studio:0.22.08
-            SUPABASE_REST_URL: http://$$cap_appname-rest.$$cap_root_domain/rest/v1/
+            SUPABASE_URL: http://srv-captain--$$cap_appname-kong:8000
+            SUPABASE_PUBLIC_URL: http://$$cap_appname-studio.$$cap_root_domain
             SUPABASE_ANON_KEY: $$cap_supabase_anon_key
             SUPABASE_SERVICE_KEY: $$cap_supabase_service_key
+            AUTH_JWT_SECRET: $$cap_jwt_secret
+
+            LOGFLARE_PRIVATE_ACCESS_TOKEN: $$cap_logflare_private_token
+            LOGFLARE_URL: http://srv-captain--$$cap_appname-analytics:4000
+            NEXT_PUBLIC_ENABLE_LOGS: true
+            NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
         caproverExtra:
-            containerHttpPort: $$cap_studio_http_port
+            containerHttpPort: 3000
 
     $$cap_appname-kong:
         image: kong:$$cap_kong_version
         volumes:
-            - $$cap_appname-kong-config:/var/lib/kong:ro
+            - $$cap_appname-kong-config:/home/kong:ro
         restart: unless-stopped
-        ports:
-            - $$cap_kong_https_port:8443
+        depends_on:
+            - $$cap_appname-analytics
         environment:
-            KONG_DATABASE: $$cap_kong_database
-            KONG_DECLARATIVE_CONFIG: $$cap_kong_declaritive_config
-            # https://github.com/supabase/cli/issues/14
-            KONG_DNS_ORDER: $$cap_kong_dns_order
-            KONG_PLUGINS: $$cap_kong_plugins
-            KONG_ADMIN_LISTEN: 0.0.0.0:$$cap_kong_admin_port, 0.0.0.0:$$cap_kong_admin_ssl_port ssl
+            KONG_DATABASE: 'off'
+            KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+            KONG_DNS_ORDER: LAST,A,CNAME
+            KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
             KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
             KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+            SUPABASE_ANON_KEY: $$cap_supabase_anon_key
+            SUPABASE_SERVICE_KEY: $$cap_supabase_service_key
+            DASHBOARD_USERNAME: $$cap_dashboard_username
+            DASHBOARD_PASSWORD: $$cap_dashboard_password
         caproverExtra:
             containerHttpPort: 8000
+            dockerfileLines:
+                - FROM kong:$$cap_kong_version
+                - 'ENTRYPOINT ["/bin/bash", "-c", "if [ -f /home/kong/temp.yml ]; then eval \"echo \\\"\$$\$$(cat /home/kong/temp.yml)\\\"\" > /home/kong/kong.yml; else cp /home/kong/kong.yml /home/kong/kong.yml; fi && /docker-entrypoint.sh kong docker-start"]'
 
     $$cap_appname-auth:
         image: supabase/gotrue:$$cap_auth_version
         depends_on:
             - $$cap_appname-db
+            - $$cap_appname-analytics
         restart: unless-stopped
         environment:
-            GOTRUE_API_HOST: $$cap_gotrue_api_host
-            GOTRUE_API_PORT: $$cap_gotrue_api_port
-            API_EXTERNAL_URL: http://$$cap_appname-rest.$$cap_root_domain
+            GOTRUE_API_HOST: 0.0.0.0
+            GOTRUE_API_PORT: 9999
+            API_EXTERNAL_URL: $$cap_api_external_url
 
             GOTRUE_DB_DRIVER: postgres
-            GOTRUE_DB_DATABASE_URL: postgres://$$cap_pg_user:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db?sslmode=disable&search_path=auth
+            GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
 
-            GOTRUE_SITE_URL: $$cap_appname-auth.$$cap_root_domain
-            GOTRUE_URI_ALLOW_LIST: $$cap_gotrue_uri_allow_list
-            GOTRUE_DISABLE_SIGNUP: $$cap_gotrue_disable_signup
+            GOTRUE_SITE_URL: $$cap_site_url
+            GOTRUE_URI_ALLOW_LIST: $$cap_additional_redirect_urls
+            GOTRUE_DISABLE_SIGNUP: $$cap_disable_signup
 
             GOTRUE_JWT_ADMIN_ROLES: service_role
             GOTRUE_JWT_AUD: authenticated
             GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
-            GOTRUE_JWT_EXP: $$cap_gotrue_jwt_expiry
+            GOTRUE_JWT_EXP: $$cap_jwt_expiry
             GOTRUE_JWT_SECRET: $$cap_jwt_secret
 
-            GOTRUE_EXTERNAL_EMAIL_ENABLED: $$cap_gotrue_external_email_enabled
-            GOTRUE_MAILER_AUTOCONFIRM: $$cap_gotrue_mailer_autoconfirm
+            GOTRUE_EXTERNAL_EMAIL_ENABLED: $$cap_enable_email_signup
+            GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: $$cap_enable_anonymous_users
+            GOTRUE_MAILER_AUTOCONFIRM: $$cap_enable_email_autoconfirm
 
-            GOTRUE_SMTP_ADMIN_EMAIL: $$cap_gotrue_smtp_admin_email
-            GOTRUE_SMTP_HOST: $$cap_gotrue_smtp_host
-            GOTRUE_SMTP_PORT: $$cap_gotrue_smtp_port
-            GOTRUE_SMTP_USER: $$cap_gotrue_smtp_user
-            GOTRUE_SMTP_PASS: $$cap_gotrue_smtp_pass
-            GOTRUE_SMTP_SENDER_NAME: $$cap_gotrue_smtp_sender_name
-            GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
-            GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
-            GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
-            GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+            GOTRUE_SMTP_ADMIN_EMAIL: $$cap_smtp_admin_email
+            GOTRUE_SMTP_HOST: $$cap_smtp_host
+            GOTRUE_SMTP_PORT: $$cap_smtp_port
+            GOTRUE_SMTP_USER: $$cap_smtp_user
+            GOTRUE_SMTP_PASS: $$cap_smtp_pass
+            GOTRUE_SMTP_SENDER_NAME: $$cap_smtp_sender_name
+            GOTRUE_MAILER_URLPATHS_INVITE: $$cap_mailer_urlpaths_invite
+            GOTRUE_MAILER_URLPATHS_CONFIRMATION: $$cap_mailer_urlpaths_confirmation
+            GOTRUE_MAILER_URLPATHS_RECOVERY: $$cap_mailer_urlpaths_recovery
+            GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: $$cap_mailer_urlpaths_email_change
 
-            GOTRUE_EXTERNAL_PHONE_ENABLED: $$cap_gotrue_enable_phone_signup
-            GOTRUE_SMS_AUTOCONFIRM: $$cap_gotrue_sms_autoconfirm
-            MFA_ENABLED: $$cap_gotrue_mfa_enabled
+            GOTRUE_EXTERNAL_PHONE_ENABLED: $$cap_enable_phone_signup
+            GOTRUE_SMS_AUTOCONFIRM: $$cap_enable_phone_autoconfirm
         caproverExtra:
-            containerHttpPort: $$cap_gotrue_api_port
+            containerHttpPort: 9999
 
     $$cap_appname-rest:
         image: postgrest/postgrest:$$cap_postgrest_version
         depends_on:
             - $$cap_appname-db
+            - $$cap_appname-analytics
         restart: unless-stopped
         environment:
-            PGRST_DB_URI: postgres://$$cap_pg_user:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
-            PGRST_DB_SCHEMA: $$cap_postgrest_db_schemas
+            PGRST_DB_URI: postgres://authenticator:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
+            PGRST_DB_SCHEMAS: $$cap_pgrst_db_schemas
             PGRST_DB_ANON_ROLE: anon
             PGRST_JWT_SECRET: $$cap_jwt_secret
             PGRST_DB_USE_LEGACY_GUCS: 'false'
+            PGRST_APP_SETTINGS_JWT_SECRET: $$cap_jwt_secret
+            PGRST_APP_SETTINGS_JWT_EXP: $$cap_jwt_expiry
         caproverExtra:
             containerHttpPort: 3000
 
@@ -100,92 +115,190 @@ services:
         image: supabase/realtime:$$cap_realtime_version
         depends_on:
             - $$cap_appname-db
+            - $$cap_appname-analytics
         restart: unless-stopped
         environment:
             PORT: 4000
             DB_HOST: srv-captain--$$cap_appname-db
             DB_PORT: 5432
-            DB_USER: $$cap_pg_user
+            DB_USER: supabase_admin
             DB_PASSWORD: $$cap_pg_pass
             DB_NAME: $$cap_pg_db
             DB_AFTER_CONNECT_QUERY: 'SET search_path TO _realtime'
             DB_ENC_KEY: supabaserealtime
             API_JWT_SECRET: $$cap_jwt_secret
-            FLY_ALLOC_ID: fly123
-            FLY_APP_NAME: realtime
-            SECRET_KEY_BASE: UpNVntn3cDxHJpq99YMc1T1AQgQpc8kfYTuRgBiYa15BLrx8etQoXz3gZv1/u2oq
+            SECRET_KEY_BASE: $$cap_secret_key_base
             ERL_AFLAGS: -proto_dist inet_tcp
-            ENABLE_TAILSCALE: 'false'
             DNS_NODES: "''"
+            RLIMIT_NOFILE: '10000'
+            APP_NAME: realtime
+            SEED_SELF_HOST: true
+            RUN_JANITOR: true
         caproverExtra:
             containerHttpPort: 4000
-            dockerfileLines:
-                # https://github.com/caprover/one-click-apps/pull/833#issuecomment-1445213826
-                - FROM supabase/realtime:$$cap_realtime_version - CMD sh -c "/app/bin/migrate && /app/bin/realtime eval 'Realtime.Release.seeds(Realtime.Repo)' && /app/bin/server"
 
     $$cap_appname-storage:
         image: supabase/storage-api:$$cap_storage_version
         depends_on:
             - $$cap_appname-db
             - $$cap_appname-rest
+            - $$cap_appname-imgproxy
         restart: unless-stopped
         volumes:
             - $$cap_appname-storage:/var/lib/storage
         environment:
             ANON_KEY: $$cap_supabase_anon_key
             SERVICE_KEY: $$cap_supabase_service_key
-            POSTGREST_URL: srv-captain--$$cap_appname-rest
+            POSTGREST_URL: http://srv-captain--$$cap_appname-rest:3000
             PGRST_JWT_SECRET: $$cap_jwt_secret
-            DATABASE_URL: postgres://$$cap_pg_user:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
-            FILE_SIZE_LIMIT: $$cap_storage_file_size_limit
+            DATABASE_URL: postgres://supabase_storage_admin:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
+            FILE_SIZE_LIMIT: 52428800
             STORAGE_BACKEND: file
             FILE_STORAGE_BACKEND_PATH: /var/lib/storage
             TENANT_ID: stub
             REGION: stub
             GLOBAL_S3_BUCKET: stub
             ENABLE_IMAGE_TRANSFORMATION: 'true'
-            IMGPROXY_URL: http://$$cap_appname-imgproxy.$$cap_root_domain
+            IMGPROXY_URL: http://srv-captain--$$cap_appname-imgproxy:5001
         caproverExtra:
             containerHttpPort: 5000
 
     $$cap_appname-imgproxy:
         image: darthsim/imgproxy:$$cap_imgproxy_version
+        restart: unless-stopped
         environment:
             IMGPROXY_BIND: ':5001'
             IMGPROXY_LOCAL_FILESYSTEM_ROOT: /
             IMGPROXY_USE_ETAG: 'true'
+            IMGPROXY_ENABLE_WEBP_DETECTION: $$cap_imgproxy_enable_webp_detection
         volumes:
-            - $$cap_appname-imgproxy-storage:/var/lib/storage
+            - $$cap_appname-storage:/var/lib/storage
         caproverExtra:
             containerHttpPort: 5001
 
-    $$cap_appname-pg-meta:
-        image: supabase/postgres-meta:$$cap_pg_meta_version
+    $$cap_appname-meta:
+        image: supabase/postgres-meta:$$cap_meta_version
         depends_on:
             - $$cap_appname-db
+            - $$cap_appname-analytics
         restart: unless-stopped
         environment:
-            PG_META_PORT: $$cap_pg_meta_port
+            PG_META_PORT: 8080
             PG_META_DB_HOST: srv-captain--$$cap_appname-db
             PG_META_DB_PORT: 5432
             PG_META_DB_NAME: $$cap_pg_db
-            PG_META_DB_USER: $$cap_pg_user
+            PG_META_DB_USER: supabase_admin
             PG_META_DB_PASSWORD: $$cap_pg_pass
         caproverExtra:
-            containerHttpPort: $$cap_pg_meta_port
+            containerHttpPort: 8080
+
+    $$cap_appname-functions:
+        image: supabase/edge-runtime:$$cap_functions_version
+        restart: unless-stopped
+        depends_on:
+            - $$cap_appname-analytics
+        volumes:
+            - $$cap_appname-functions:/home/deno/functions
+        environment:
+            JWT_SECRET: $$cap_jwt_secret
+            SUPABASE_URL: http://srv-captain--$$cap_appname-kong:8000
+            SUPABASE_ANON_KEY: $$cap_supabase_anon_key
+            SUPABASE_SERVICE_ROLE_KEY: $$cap_supabase_service_key
+            SUPABASE_DB_URL: postgresql://postgres:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/$$cap_pg_db
+            VERIFY_JWT: $$cap_functions_verify_jwt
+        caproverExtra:
+            containerHttpPort: 9000
+            dockerfileLines:
+                - FROM supabase/edge-runtime:$$cap_functions_version
+                - 'CMD ["start", "--main-service", "/home/deno/functions/main"]'
+
+    $$cap_appname-analytics:
+        image: supabase/logflare:$$cap_analytics_version
+        restart: unless-stopped
+        depends_on:
+            - $$cap_appname-db
+        environment:
+            LOGFLARE_NODE_HOST: 127.0.0.1
+            DB_USERNAME: supabase_admin
+            DB_DATABASE: _supabase
+            DB_HOSTNAME: srv-captain--$$cap_appname-db
+            DB_PORT: 5432
+            DB_PASSWORD: $$cap_pg_pass
+            DB_SCHEMA: _analytics
+            LOGFLARE_PUBLIC_ACCESS_TOKEN: $$cap_logflare_public_token
+            LOGFLARE_PRIVATE_ACCESS_TOKEN: $$cap_logflare_private_token
+            LOGFLARE_SINGLE_TENANT: true
+            LOGFLARE_SUPABASE_MODE: true
+            LOGFLARE_MIN_CLUSTER_SIZE: 1
+            POSTGRES_BACKEND_URL: postgresql://supabase_admin:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/_supabase
+            POSTGRES_BACKEND_SCHEMA: _analytics
+            LOGFLARE_FEATURE_FLAG_OVERRIDE: multibackend=true
+        caproverExtra:
+            containerHttpPort: 4000
+
+    $$cap_appname-vector:
+        image: timberio/vector:$$cap_vector_version
+        restart: unless-stopped
+        volumes:
+            - $$cap_appname-vector-config:/etc/vector:ro
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        environment:
+            LOGFLARE_PUBLIC_ACCESS_TOKEN: $$cap_logflare_public_token
+        caproverExtra:
+            notExposeAsWebApp: 'true'
+            dockerfileLines:
+                - FROM timberio/vector:$$cap_vector_version
+                - 'CMD ["--config", "/etc/vector/vector.yml"]'
+
+    $$cap_appname-pooler:
+        image: supabase/supavisor:$$cap_pooler_version
+        restart: unless-stopped
+        depends_on:
+            - $$cap_appname-db
+            - $$cap_appname-analytics
+        ports:
+            - $$cap_pooler_proxy_port_transaction:6543
+        volumes:
+            - $$cap_appname-pooler-config:/etc/pooler:ro
+        environment:
+            PORT: 4000
+            POSTGRES_PORT: 5432
+            POSTGRES_DB: $$cap_pg_db
+            POSTGRES_PASSWORD: $$cap_pg_pass
+            DATABASE_URL: ecto://supabase_admin:$$cap_pg_pass@srv-captain--$$cap_appname-db:5432/_supabase
+            CLUSTER_POSTGRES: true
+            SECRET_KEY_BASE: $$cap_secret_key_base
+            VAULT_ENC_KEY: $$cap_vault_enc_key
+            API_JWT_SECRET: $$cap_jwt_secret
+            METRICS_JWT_SECRET: $$cap_jwt_secret
+            REGION: local
+            ERL_AFLAGS: -proto_dist inet_tcp
+            POOLER_TENANT_ID: $$cap_pooler_tenant_id
+            POOLER_DEFAULT_POOL_SIZE: $$cap_pooler_default_pool_size
+            POOLER_MAX_CLIENT_CONN: $$cap_pooler_max_client_conn
+            POOLER_POOL_MODE: transaction
+            DB_POOL_SIZE: $$cap_pooler_db_pool_size
+        caproverExtra:
+            containerHttpPort: 4000
+            dockerfileLines:
+                - FROM supabase/supavisor:$$cap_pooler_version
+                - 'CMD ["/bin/sh", "-c", "/app/bin/migrate && /app/bin/supavisor eval \"\$$\$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"]'
 
     $$cap_appname-db:
-        # not using postgres image because supabase/postgres
-        # has some additional initdb script
         image: supabase/postgres:$$cap_db_version
         volumes:
-            - $$cap_appname-db-realtime:/docker-entrypoint-initdb.d/realtime.sql
-            - $$cap_appname-db-roles:/docker-entrypoint-initdb.d/roles.sql
-            # Must be superuser to enable pg_net extension
-            - $$cap_appname-db-webhooks:/etc/postgresql.schema.sql
+            - $$cap_appname-db-realtime:/docker-entrypoint-initdb.d/migrations/99-realtime.sql
+            - $$cap_appname-db-webhooks:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql
+            - $$cap_appname-db-roles:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql
+            - $$cap_appname-db-jwt:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql
             - $$cap_appname-db-data:/var/lib/postgresql/data
-
+            - $$cap_appname-db-supabase:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql
+            - $$cap_appname-db-logs:/docker-entrypoint-initdb.d/migrations/99-logs.sql
+            - $$cap_appname-db-pooler:/docker-entrypoint-initdb.d/migrations/99-pooler.sql
+            - $$cap_appname-db-config:/etc/postgresql-custom
         restart: unless-stopped
+        depends_on:
+            - $$cap_appname-vector
         environment:
             POSTGRES_HOST: /var/run/postgresql
             PGPORT: 5432
@@ -194,8 +307,13 @@ services:
             POSTGRES_PASSWORD: $$cap_pg_pass
             PGDATABASE: $$cap_pg_db
             POSTGRES_DB: $$cap_pg_db
+            JWT_SECRET: $$cap_jwt_secret
+            JWT_EXP: $$cap_jwt_expiry
         caproverExtra:
             notExposeAsWebApp: 'true'
+            dockerfileLines:
+                - FROM supabase/postgres:$$cap_db_version
+                - 'CMD ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]'
 
 caproverOneClickApp:
     variables:
@@ -219,10 +337,16 @@ caproverOneClickApp:
           defaultValue: '20230216-e731b77'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/studio/tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_studio_http_port
-          label: Studio HTTP port
-          defaultValue: '3000'
-          validRegex: /^\d+$/
+        - id: $$cap_studio_default_organization
+          label: Default Organization Name
+          defaultValue: 'Default Organization'
+        - id: $$cap_studio_default_project
+          label: Default Project Name
+          defaultValue: 'Default Project'
+        - id: $$cap_openai_api_key
+          label: OpenAI API Key (Optional)
+          description: For AI features in Studio
+          defaultValue: ''
 
         # kong variables
         - id: $$cap_kong_version
@@ -230,37 +354,16 @@ caproverOneClickApp:
           defaultValue: '2.8.1'
           description: Check out their Docker page for the valid tags https://hub.docker.com/_/kong?tab=tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_kong_http_port
-          label: Kong HTTP port
-          defaultValue: '8000'
-          validRegex: /^\d+$/
-        - id: $$cap_kong_https_port
-          label: Kong HTTPS port
-          defaultValue: '8443'
-          validRegex: /^\d+$/
-        - id: $$cap_kong_admin_port
-          label: Kong Admin Listen port
-          defaultValue: '8001'
-          validRegex: /^\d+$/
-        - id: $$cap_kong_admin_ssl_port
-          label: Kong Admin Listen SSL port
-          defaultValue: '8444'
-          validRegex: /^\d+$/
-        - id: $$cap_kong_database
-          label: Kong Database
-          defaultValue: 'off'
+        - id: $$cap_dashboard_username
+          label: Dashboard Username
+          defaultValue: 'supabase'
+          description: Username for accessing Supabase Studio dashboard
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_kong_declaritive_config
-          label: Kong Declarative Config
-          defaultValue: '/var/lib/kong/kong.yml'
-        - id: $$cap_kong_dns_order
-          label: Kong DNS order
-          defaultValue: 'LAST,A,CNAME'
-          validRegex: /^([^\s^\/])+$/
-        - id: $$cap_kong_plugins
-          label: Kong Plugins
-          defaultValue: 'request-transformer,cors,key-auth,acl'
-          validRegex: /^([^\s^\/])+$/
+        - id: $$cap_dashboard_password
+          label: Dashboard Password
+          defaultValue: $$cap_gen_random_hex(16)
+          description: Password for accessing Supabase Studio dashboard
+          validRegex: /.{8,}/
 
         # auth variables
         - id: $$cap_auth_version
@@ -268,62 +371,80 @@ caproverOneClickApp:
           defaultValue: 'v2.47.0'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/gotrue/tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_gotrue_api_host
-          label: Gotrue API Host
-          defaultValue: '0.0.0.0'
-          validRegex: /^([^\s^\/])+$/
-        - id: $$cap_gotrue_api_port
-          label: Gotrue API port
-          defaultValue: '9999'
-          validRegex: /^([^\s^\/])+$/
-        - id: $$cap_gotrue_uri_allow_list
-          label: Gotrue URI allow list
+        - id: $$cap_api_external_url
+          label: API External URL
+          defaultValue: 'http://localhost'
+          description: External URL for the API
+        - id: $$cap_site_url
+          label: Site URL
+          defaultValue: 'http://localhost:3000'
+          description: The base URL of your site
+        - id: $$cap_additional_redirect_urls
+          label: Additional Redirect URLs
+          description: Comma-separated list of additional allowed redirect URLs
           defaultValue: ''
-        - id: $$cap_gotrue_disable_signup
-          label: Gotrue Disable Signup
+        - id: $$cap_disable_signup
+          label: Disable Signup
           defaultValue: 'false'
           validRegex: /^(true|false)$/
-        - id: $$cap_gotrue_jwt_expiry
-          label: Gotrue JWT expiry
-          defaultValue: '84600'
+        - id: $$cap_jwt_expiry
+          label: JWT Expiry (seconds)
+          defaultValue: '3600'
           validRegex: /^\d+$/
-        - id: $$cap_gotrue_external_email_enabled
-          label: Gotrue external email enabled
+        - id: $$cap_secret_key_base
+          label: Secret Key Base
+          defaultValue: $$cap_gen_random_hex(64)
+          description: Secret key for realtime and pooler services
+          validRegex: /.{32,}/
+        - id: $$cap_enable_email_signup
+          label: Enable Email Signup
           defaultValue: 'true'
           validRegex: /^(true|false)$/
-        - id: $$cap_gotrue_mailer_autoconfirm
-          label: Gotrue mailer autoconfirm
+        - id: $$cap_enable_anonymous_users
+          label: Enable Anonymous Users
           defaultValue: 'false'
           validRegex: /^(true|false)$/
-        - id: $$cap_gotrue_smtp_admin_email
-          label: Gotrue SMTP admin email
+        - id: $$cap_enable_email_autoconfirm
+          label: Enable Email Auto-confirm
+          defaultValue: 'false'
+          validRegex: /^(true|false)$/
+        - id: $$cap_smtp_admin_email
+          label: SMTP Admin Email
           defaultValue: 'admin@example.com'
-        - id: $$cap_gotrue_smtp_host
-          label: Gotrue SMTP Host
+        - id: $$cap_smtp_host
+          label: SMTP Host
           defaultValue: ''
-        - id: $$cap_gotrue_smtp_port
-          label: Gotrue SMTP port
-          defaultValue: '567'
+        - id: $$cap_smtp_port
+          label: SMTP Port
+          defaultValue: '587'
           validRegex: /^\d+$/
-        - id: $$cap_gotrue_smtp_user
-          label: Gotrue SMTP user
+        - id: $$cap_smtp_user
+          label: SMTP User
           defaultValue: ''
-        - id: $$cap_gotrue_smtp_pass
-          label: Gotrue SMTP password
+        - id: $$cap_smtp_pass
+          label: SMTP Password
           defaultValue: ''
-        - id: $$cap_gotrue_smtp_sender_name
-          label: Gotrue SMTP sender name
+        - id: $$cap_smtp_sender_name
+          label: SMTP Sender Name
           defaultValue: ''
-        - id: $$cap_gotrue_enable_phone_signup
-          label: Gotrue External Phone Signup
-          defaultValue: 'true'
-          validRegex: /^(true|false)$/
-        - id: $$cap_gotrue_sms_autoconfirm
-          label: Gotrue SMS autoconfirm
+        - id: $$cap_mailer_urlpaths_invite
+          label: Mailer URL Path - Invite
+          defaultValue: '/auth/v1/verify'
+        - id: $$cap_mailer_urlpaths_confirmation
+          label: Mailer URL Path - Confirmation
+          defaultValue: '/auth/v1/verify'
+        - id: $$cap_mailer_urlpaths_recovery
+          label: Mailer URL Path - Recovery
+          defaultValue: '/auth/v1/verify'
+        - id: $$cap_mailer_urlpaths_email_change
+          label: Mailer URL Path - Email Change
+          defaultValue: '/auth/v1/verify'
+        - id: $$cap_enable_phone_signup
+          label: Enable Phone Signup
           defaultValue: 'false'
           validRegex: /^(true|false)$/
-        - id: $$cap_gotrue_mfa_enabled
-          label: Gotrue MFA enabled
+        - id: $$cap_enable_phone_autoconfirm
+          label: Enable Phone Auto-confirm
           defaultValue: 'false'
           validRegex: /^(true|false)$/
 
@@ -333,9 +454,9 @@ caproverOneClickApp:
           defaultValue: 'v10.1.2'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/postgrest/postgrest/tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_postgrest_db_schemas
-          label: Postgrest DB Schemas
-          defaultValue: 'public, storage'
+        - id: $$cap_pgrst_db_schemas
+          label: PostgREST DB Schemas
+          defaultValue: 'public,storage,graphql_public'
           validRegex: /^([^\s^\/])+$/
 
         # realtime variables
@@ -351,10 +472,6 @@ caproverOneClickApp:
           defaultValue: 'v0.28.2'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/gotrue/tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_storage_file_size_limit
-          label: Storage File Size Limit
-          defaultValue: '52428800'
-          validRegex: /^\d+$/
 
         # postgres variables
         - id: $$cap_db_version
@@ -362,29 +479,15 @@ caproverOneClickApp:
           defaultValue: '15.1.0.42-rc2'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/postgres/tags
           validRegex: /^([^\s^\/])+$/
-        - id: $$cap_pg_user
-          label: Postgres Username
-          defaultValue: 'postgres'
-          validRegex: /.{1,}/
         - id: $$cap_pg_pass
           label: Postgres Password
-          defaultValue: $$cap_gen_random_hex(64)
-          validRegex: /.{1,}/
+          defaultValue: $$cap_gen_random_hex(32)
+          validRegex: /.{8,}/
         - id: $$cap_pg_db
           label: Postgres Default Database
           defaultValue: 'postgres'
           validRegex: /.{1,}/
 
-        # pg-meta variables
-        - id: $$cap_pg_meta_version
-          label: Postgres Meta Version
-          defaultValue: 'v0.60.7'
-          description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/postgres-meta/tags
-          validRegex: /^([^\s^\/])+$/
-        - id: $$cap_pg_meta_port
-          label: Postgres Meta Port
-          defaultValue: '8080'
-          validRegex: /^\d+$/
 
         # imgproxy variables
         - id: $$cap_imgproxy_version
@@ -392,30 +495,128 @@ caproverOneClickApp:
           defaultValue: 'v3.11'
           description: Check out their Docker page for the valid tags https://hub.docker.com/r/darthsim/imgproxy/tags
           validRegex: /^([^\s^\/])+$/
+        - id: $$cap_imgproxy_enable_webp_detection
+          label: Enable WebP Detection
+          defaultValue: 'false'
+          validRegex: /^(true|false)$/
+
+        # functions variables
+        - id: $$cap_functions_version
+          label: Edge Functions Version
+          defaultValue: 'v1.67.4'
+          description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/edge-runtime/tags
+          validRegex: /^([^\s^\/])+$/
+        - id: $$cap_functions_verify_jwt
+          label: Functions Verify JWT
+          defaultValue: 'false'
+          validRegex: /^(true|false)$/
+
+        # analytics variables
+        - id: $$cap_analytics_version
+          label: Analytics Version
+          defaultValue: '1.14.2'
+          description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/logflare/tags
+          validRegex: /^([^\s^\/])+$/
+        - id: $$cap_logflare_public_token
+          label: Logflare Public Access Token
+          defaultValue: $$cap_gen_random_hex(32)
+          validRegex: /.{32,}/
+        - id: $$cap_logflare_private_token
+          label: Logflare Private Access Token
+          defaultValue: $$cap_gen_random_hex(32)
+          validRegex: /.{32,}/
+
+        # vector variables
+        - id: $$cap_vector_version
+          label: Vector Version
+          defaultValue: '0.28.1-alpine'
+          description: Check out their Docker page for the valid tags https://hub.docker.com/r/timberio/vector/tags
+          validRegex: /^([^\s^\/])+$/
+
+        # pooler variables
+        - id: $$cap_pooler_version
+          label: Connection Pooler Version
+          defaultValue: '2.5.7'
+          description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/supavisor/tags
+          validRegex: /^([^\s^\/])+$/
+        - id: $$cap_vault_enc_key
+          label: Vault Encryption Key
+          defaultValue: $$cap_gen_random_hex(32)
+          description: Encryption key for the connection pooler vault
+          validRegex: /.{32,}/
+        - id: $$cap_pooler_tenant_id
+          label: Pooler Tenant ID
+          defaultValue: 'supabase'
+          validRegex: /^([^\s^\/])+$/
+        - id: $$cap_pooler_default_pool_size
+          label: Pooler Default Pool Size
+          defaultValue: '15'
+          validRegex: /^\d+$/
+        - id: $$cap_pooler_max_client_conn
+          label: Pooler Max Client Connections
+          defaultValue: '100'
+          validRegex: /^\d+$/
+        - id: $$cap_pooler_db_pool_size
+          label: Pooler DB Pool Size
+          defaultValue: '10'
+          validRegex: /^\d+$/
+        - id: $$cap_pooler_proxy_port_transaction
+          label: Pooler Proxy Port (Transaction Mode)
+          defaultValue: '6543'
+          validRegex: /^\d+$/
+
+        # meta variables (renamed from pg-meta)
+        - id: $$cap_meta_version
+          label: Postgres Meta Version
+          defaultValue: 'v0.60.7'
+          description: Check out their Docker page for the valid tags https://hub.docker.com/r/supabase/postgres-meta/tags
+          validRegex: /^([^\s^\/])+$/
 
     instructions:
         start: >-
-            Supabase is an open source Firebase alternative.
+            Supabase is an open source Firebase alternative providing authentication, real-time subscriptions, storage, and edge functions.
         end: >
-            Supabase is deployed.
-            1. Make sure to enable websocket support inside $$cap_appname-realtime.
-            2. You will also have to create a kong.yml inside /var/lib/docker/volumes/captain--$$cap_appname-kong-config/_data
-               Check https://github.com/supabase/supabase/blob/master/docker/volumes/api/kong.yml for the example content
-                (make sure to edit and add your ANON_KEY, SERVICE_KEY and service url)
-            3. # Set $$cap_appname-db instance count to 0
-              `docker service scale srv-captain--$$cap_appname-db=0`
-            4. Run the following command
-              # delete already created database
-              `rm -rf /var/lib/docker/volumes/captain--$$cap_appname-db-data/_data/*`
-              # clone supabase repo to extract migrations
-              `git clone https://github.com/supabase/supabase`
-              # copy migrations required for supabase
-              `cp -r supabase/docker/volumes/db/* /var/lib/docker/volumes/captain--$$cap_appname-db-data/_data/ && rm -rf supabase`
-              # now set instance count for $$cap_appname-db back to 1
-              `docker service scale srv-captain--$$cap_appname-db=1`
-              # once database is started, set wal_level to logical and restart database again
-              `echo "wal_level = 'logical'" >> /var/lib/docker/volumes/captain--$$cap_appname-db-data/_data/postgresql.conf`
+            Supabase is deployed with all services including Studio, Auth, Storage, Realtime, Functions, and Analytics.
+            
+            IMPORTANT SETUP STEPS:
+            
+            1. Create Kong configuration file:
+               Create temp.yml in /var/lib/docker/volumes/captain--$$cap_appname-kong-config/_data/temp.yml
+               Use the configuration from https://github.com/supabase/supabase/blob/master/docker/volumes/api/kong.yml
+               This file will be processed as a template with environment variable substitution.
+               Required variables: $SUPABASE_ANON_KEY, $SUPABASE_SERVICE_KEY, $DASHBOARD_USERNAME, $DASHBOARD_PASSWORD
+            
+            2. Setup database initialization scripts:
+               Copy the required SQL files from https://github.com/supabase/supabase/tree/master/docker/volumes/db to:
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-realtime/_data/99-realtime.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-roles/_data/99-roles.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-jwt/_data/99-jwt.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-webhooks/_data/98-webhooks.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-logs/_data/99-logs.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-pooler/_data/99-pooler.sql
+               - /var/lib/docker/volumes/captain--$$cap_appname-db-supabase/_data/97-_supabase.sql
+               
+            3. Configure Vector logging:
+               Copy vector.yml from https://github.com/supabase/supabase/blob/master/docker/volumes/logs/vector.yml
+               to /var/lib/docker/volumes/captain--$$cap_appname-vector-config/_data/vector.yml
+               
+            4. Configure Connection Pooler:
+               Copy pooler.exs from https://github.com/supabase/supabase/blob/master/docker/volumes/pooler/pooler.exs
+               to /var/lib/docker/volumes/captain--$$cap_appname-pooler-config/_data/pooler.exs
+            
+            5. Access points:
+               - Studio Dashboard: http://$$cap_appname-studio.$$cap_root_domain (login: $$cap_dashboard_username/$$cap_dashboard_password)
+               - API Gateway: http://$$cap_appname-kong.$$cap_root_domain
+               - Connection Pooler: $$cap_appname-pooler.$$cap_root_domain:$$cap_pooler_proxy_port_transaction
+               
+            6. Important Notes:
+               - The Vector service requires Docker socket access for log collection
+               - All services must start in proper order: Vector -> Database -> Analytics -> Others
+               - Kong requires template processing, ensure temp.yml is properly configured
+               - Connection pooler provides transaction-mode pooling on port $$cap_pooler_proxy_port_transaction
+            
+            Note: All services are interconnected and depend on proper configuration files and database initialization.
     displayName: Supabase
     isOfficial: true
-    description: Supabase is an open source Firebase alternative.
-    documentation: Taken from https://github.com/supabase/supabase
+    description: Complete Supabase stack with Studio, Auth, Storage, Realtime, Functions, Analytics, and Connection Pooler
+    documentation: Based on official Supabase Docker Compose setup - https://github.com/supabase/supabase
